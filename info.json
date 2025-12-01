@@ -1,0 +1,10 @@
+{
+    "author": ["TheOneMightyArc"],
+    "install_msg": "AntiRaid installed. Use `[p]antiraid toggle` to turn it on and `[p]antiraid action` to set the punishment.",
+    "name": "AntiRaid",
+    "short": "Prevents raids by monitoring message velocity and mentions.",
+    "description": "Monitors chat for spam (message velocity) and mass mentions. If a user exceeds the limits, it automatically mutes, kicks, or bans them.",
+    "tags": ["moderation", "security", "raid", "antispam", "automod"],
+    "requirements": [],
+    "min_bot_version": "3.5.0"
+}
