@@ -1,9 +1,9 @@
 {
     "author": ["TheOneMightyArc"],
-    "install_msg": "AntiRaid installed. Use `[p]antiraid toggle` to turn it on and `[p]antiraid action` to set the punishment.",
+    "install_msg": "AntiRaid installed. Use `[p]antiraid toggle` to start.\nSet a log channel: `[p]antiraid logchannel #logs`\nSet a ping role: `[p]antiraid pingrole @Mods`",
     "name": "AntiRaid",
     "short": "Prevents raids by monitoring message velocity and mentions.",
-    "description": "Monitors chat for spam (message velocity) and mass mentions. If a user exceeds the limits, it automatically mutes, kicks, or bans them.",
+    "description": "Monitors chat for spam (message velocity) and mass mentions. If limits are exceeded, it punishes the user, logs the action to a channel, and pings a designated role.",
     "tags": ["moderation", "security", "raid", "antispam", "automod"],
     "requirements": [],
     "min_bot_version": "3.5.0"

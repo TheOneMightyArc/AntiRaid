@@ -14,59 +14,91 @@ class AntiRaid(commands.Cog):
         
         default_guild = {
             "enabled": False,
-            "spam_limit": 7,        # Max messages allowed...
-            "spam_interval": 5,     # ...within this many seconds.
-            "mention_limit": 5,     # Max mentions per message
-            "action": "mute",       # mute, kick, ban
-            "mute_duration": 600,   # Seconds (10 mins)
-            "whitelist_roles": []
+            "spam_limit": 7,
+            "spam_interval": 5,
+            "mention_limit": 5,
+            "action": "mute",
+            "mute_duration": 600,
+            "whitelist_roles": [],
+            # --- New Settings ---
+            "log_channel": None,      # ID of channel to send detailed logs
+            "ping_role": None,        # ID of role to ping
+            "ping_message": "Raider detected! Action taken." # Custom message
         }
         self.config.register_guild(**default_guild)
         
-        # In-memory storage for spam tracking
-        # {guild_id: {user_id: [timestamp1, timestamp2]}}
         self.message_history = defaultdict(lambda: defaultdict(list))
 
     async def _punish_user(self, message: discord.Message, reason: str):
-        """Executes the configured punishment."""
+        """Executes the configured punishment, logs it, and pings mods."""
         guild = message.guild
         member = message.author
         settings = await self.config.guild(guild).all()
         action = settings["action"]
 
-        # Check hierarchy
         if member.top_role >= guild.me.top_role:
-            return # Cannot punish someone higher than the bot
+            return 
 
+        # --- 1. Execute Punishment ---
         try:
-            # 1. Delete the triggering message(s)
+            # Delete spammy messages
             def check(m):
                 return m.author == member and (message.created_at - m.created_at).total_seconds() < 10
             
             await message.channel.purge(limit=15, check=check)
 
-            # 2. Execute Action
             if action == "mute":
                 duration = datetime.timedelta(seconds=settings["mute_duration"])
                 await member.timeout(duration, reason=reason)
-                await message.channel.send(f"🛡️ **AntiRaid:** Muted {member.mention} for spamming/raiding.")
+                action_verbed = "Muted"
             
             elif action == "kick":
                 await member.kick(reason=reason)
-                await message.channel.send(f"🛡️ **AntiRaid:** Kicked {member.mention} for spamming/raiding.")
+                action_verbed = "Kicked"
             
             elif action == "ban":
                 await member.ban(reason=reason, delete_message_days=1)
-                await message.channel.send(f"🛡️ **AntiRaid:** Banned {member.mention} for spamming/raiding.")
+                action_verbed = "Banned"
 
         except discord.Forbidden:
             print(f"[AntiRaid] Missing permissions to punish {member.id} in {guild.name}.")
+            return
         except Exception as e:
             print(f"[AntiRaid] Error: {e}")
+            return
+
+        # --- 2. Send Alert/Ping in Chat ---
+        alert_content = f"🛡️ **AntiRaid:** {action_verbed} {member.mention} for spamming/raiding."
+        
+        if settings["ping_role"]:
+            role = guild.get_role(settings["ping_role"])
+            if role:
+                # Add the ping and custom message
+                alert_content = f"{role.mention} {settings['ping_message']}\n" + alert_content
+        
+        try:
+            await message.channel.send(alert_content, allowed_mentions=discord.AllowedMentions(roles=True))
+        except:
+            pass
+
+        # --- 3. Send Detailed Log ---
+        if settings["log_channel"]:
+            log_chan = guild.get_channel(settings["log_channel"])
+            if log_chan:
+                embed = discord.Embed(title="🛡️ AntiRaid Action Log", color=discord.Color.red(), timestamp=datetime.datetime.utcnow())
+                embed.add_field(name="User", value=f"{member.name} ({member.id})", inline=True)
+                embed.add_field(name="Action", value=action_verbed, inline=True)
+                embed.add_field(name="Reason", value=reason, inline=False)
+                embed.add_field(name="Channel", value=message.channel.mention, inline=True)
+                embed.set_thumbnail(url=member.display_avatar.url)
+                
+                try:
+                    await log_chan.send(embed=embed)
+                except:
+                    print(f"[AntiRaid] Failed to send log to channel {settings['log_channel']}")
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
-        # Ignore bots, DMs, and webhooks
         if not message.guild or message.author.bot:
             return
 
@@ -74,7 +106,6 @@ class AntiRaid(commands.Cog):
         if not settings["enabled"]:
             return
 
-        # Check Whitelist
         user_roles = [r.id for r in message.author.roles]
         if any(rid in settings["whitelist_roles"] for rid in user_roles):
             return
@@ -82,7 +113,6 @@ class AntiRaid(commands.Cog):
             return
 
         # --- CHECK 1: Mass Mentions ---
-        # Count user mentions + role mentions + @everyone/@here
         mention_count = len(message.mentions) + len(message.role_mentions)
         if message.mention_everyone:
             mention_count += 1
@@ -91,23 +121,18 @@ class AntiRaid(commands.Cog):
             await self._punish_user(message, f"AntiRaid: Exceeded mention limit ({mention_count})")
             return
 
-        # --- CHECK 2: Message Velocity (Spam) ---
+        # --- CHECK 2: Message Velocity ---
         now = message.created_at.timestamp()
         user_history = self.message_history[message.guild.id][message.author.id]
         
-        # Add current message time
         user_history.append(now)
         
-        # Remove timestamps older than the interval
-        # Keep only messages sent within the last 'spam_interval' seconds
         cutoff = now - settings["spam_interval"]
         self.message_history[message.guild.id][message.author.id] = [
             t for t in user_history if t > cutoff
         ]
         
-        # Check if count exceeds limit
         if len(self.message_history[message.guild.id][message.author.id]) >= settings["spam_limit"]:
-            # Clear history so we don't try to ban them twice instantly
             self.message_history[message.guild.id][message.author.id] = []
             await self._punish_user(message, "AntiRaid: Exceeded message velocity limit")
 
@@ -172,6 +197,34 @@ class AntiRaid(commands.Cog):
             else:
                 await ctx.send("That role is not whitelisted.")
 
+    # --- New Commands ---
+
+    @antiraid.command(name="logchannel")
+    async def ar_logchannel(self, ctx: commands.Context, channel: discord.TextChannel = None):
+        """Set the log channel. Leave empty to disable logging."""
+        if channel:
+            await self.config.guild(ctx.guild).log_channel.set(channel.id)
+            await ctx.send(f"Logs will now be sent to {channel.mention}.")
+        else:
+            await self.config.guild(ctx.guild).log_channel.set(None)
+            await ctx.send("Logging disabled.")
+
+    @antiraid.command(name="pingrole")
+    async def ar_pingrole(self, ctx: commands.Context, role: discord.Role = None):
+        """Set the role to ping when a raid is detected. Leave empty to disable."""
+        if role:
+            await self.config.guild(ctx.guild).ping_role.set(role.id)
+            await ctx.send(f"I will ping {role.mention} when a raid triggers.")
+        else:
+            await self.config.guild(ctx.guild).ping_role.set(None)
+            await ctx.send("Role pings disabled.")
+
+    @antiraid.command(name="pingmessage")
+    async def ar_pingmessage(self, ctx: commands.Context, *, message: str):
+        """Set the custom text to send with the role ping."""
+        await self.config.guild(ctx.guild).ping_message.set(message)
+        await ctx.send(f"Ping message set to: `{message}`")
+
     @antiraid.command(name="view")
     async def ar_view(self, ctx: commands.Context):
         """View current settings."""
@@ -179,6 +232,7 @@ class AntiRaid(commands.Cog):
         e = discord.Embed(title="AntiRaid Settings", color=discord.Color.red())
         e.add_field(name="Status", value="✅ Enabled" if s['enabled'] else "❌ Disabled")
         e.add_field(name="Action", value=s['action'].upper())
-        e.add_field(name="Spam Sensitivity", value=f"{s['spam_limit']} msgs in {s['spam_interval']} sec")
-        e.add_field(name="Mention Limit", value=s['mention_limit'])
+        e.add_field(name="Spam Limit", value=f"{s['spam_limit']} msgs / {s['spam_interval']} sec")
+        e.add_field(name="Log Channel", value=f"<#{s['log_channel']}>" if s['log_channel'] else "None")
+        e.add_field(name="Ping Role", value=f"<@&{s['ping_role']}>" if s['ping_role'] else "None")
         await ctx.send(embed=e)
